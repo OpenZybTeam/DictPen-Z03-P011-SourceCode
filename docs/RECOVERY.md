@@ -1,97 +1,97 @@
-# Resource Recovery Notes
+# 资源提取说明
 
-The Z03 application ships its QML and JavaScript inside the ELF executable through the Qt resource system. This note documents the layout used to rebuild `source/`.
+Z03 应用把 QML 与 JavaScript 编译进 ELF 可执行文件的 Qt 资源系统。本文记录重建 `source/` 时使用的布局。
 
-## Input
+## 输入
 
-- Device executable: `/usr/bin/Z03`
-- Size: 4,103,844 bytes
-- ELF32 ARM EABI5, hard-float
-- Qt runtime: 5.10.1
+- 设备可执行文件：`/usr/bin/Z03`
+- 大小：4,103,844 字节
+- ELF32 ARM EABI5，hard-float
+- Qt 运行时：5.10.1
 
-## Resource arrays
+## 资源数组
 
-The Qt resource compiler emits three arrays. Their locations in this build are:
+Qt 资源编译器生成三个数组。本版本中的位置如下：
 
-| Array | File offset | Contents |
-|-------|-------------|----------|
-| `qt_resource_struct` | `0x1a3acc` | 421 tree nodes, 22 bytes each |
-| `qt_resource_name` | `0x1a5efc` | 419 name records |
-| `qt_resource_data` | `0x1a9f54` | concatenated file payloads |
+| 数组 | 文件偏移 | 内容 |
+|------|----------|------|
+| `qt_resource_struct` | `0x1a3acc` | 421 个树节点，每个 22 字节 |
+| `qt_resource_name` | `0x1a5efc` | 419 条名称记录 |
+| `qt_resource_data` | `0x1a9f54` | 连续存放的文件负载 |
 
-The resource tree is walked breadth-first. Each directory node stores the absolute index of its first child.
+资源树按广度优先排列。每个目录节点保存第一个子节点的绝对索引。
 
-## Name records
+## 名称记录
 
 ```
-u16  length          number of UTF-16 code units
-u32  hash            Qt string hash
-u16  chars[length]   UTF-16 big-endian
+u16  length          UTF-16 码元数量
+u32  hash            Qt 字符串哈希
+u16  chars[length]   UTF-16 大端
 ```
 
-Name offsets in tree nodes are relative to the start of `qt_resource_name`.
+树节点中的名称偏移相对于 `qt_resource_name` 起点。
 
-## Tree nodes
+## 树节点
 
-All nodes are 22 bytes. The first fields differ by node type, followed by an eight-byte timestamp.
+所有节点均为 22 字节。前几个字段按节点类型区分，后面是 8 字节时间戳。
 
-Directory:
+目录：
 
 ```
 u32 name_offset
-u16 flags            0x02 Directory, 0x01 Compressed
+u16 flags            0x02 Directory，0x01 Compressed
 u32 child_count
-u32 first_child      absolute node index
+u32 first_child      子节点绝对索引
 u64 timestamp
 ```
 
-File:
+文件：
 
 ```
 u32 name_offset
 u16 flags
 u16 country
 u16 language
-u32 data_offset      relative to qt_resource_data
+u32 data_offset      相对于 qt_resource_data
 u64 timestamp
 ```
 
-## Data payloads
+## 数据负载
 
 ```
-u32 length           payload length in bytes
+u32 length           负载字节数
 u8  payload[length]
 ```
 
-If the compressed flag is set, the payload uses the `qCompress` format:
+设置压缩标志时，负载使用 `qCompress` 格式：
 
 ```
 u32 uncompressed_size
 u8  zlib_stream
 ```
 
-## Extraction
+## 提取
 
-`tools/extract_qrc.py` implements this layout. Resource keys that contain a query string (for example `polyfill.min.js?features=es6`) are written without the query suffix.
+`tools/extract_qrc.py` 实现了上述布局。包含查询字符串的资源键（例如 `polyfill.min.js?features=es6`）写出时会去掉查询后缀。
 
 ```bash
-# QML and JavaScript only
+# 仅提取 QML 与 JavaScript
 python3 tools/extract_qrc.py Z03 -o extracted
 
-# All embedded resources
+# 提取全部内嵌资源
 python3 tools/extract_qrc.py Z03 -o extracted --all
 ```
 
-## Verification
+## 校验
 
-Three QML files were also present as plaintext in a device coredump:
+设备 coredump 中还有三份明文 QML：
 
 - `ZybQmlFiles/ZybSet/SetDevInfo.qml`
 - `ZybQmlFiles/ZybSet/SetUserReport.qml`
 - `ZybQmlFiles/ZybVirturlKeyBoard/ZybDigitalKeyBoard.qml`
 
-Their resource copies match the coredump copies byte for byte apart from a missing trailing newline in the coredump copies.
+资源副本与 coredump 副本逐字节一致，唯一差异是 coredump 副本末尾缺少换行。
 
-## Why qmlc caches were not used
+## 未使用 qmlc 缓存的原因
 
-The device also stores compiled QML caches (`qv4cdata`, cache version `0x14`). These units have flags `0x27`, including `ContainsMachineCode`, and use the `jit` code generator with the `arm-little_endian-ilp32-eabi-hardfloat` architecture. Function bodies are ARM Thumb machine code (for example `4d f8 04 ed`), so they contain neither Moth bytecode nor the original source text. The cache is useful for structure recovery only; the resource bundle is the authoritative source.
+设备上还保存了编译后的 QML 缓存（`qv4cdata`，缓存版本 `0x14`）。这些单元的 flags 为 `0x27`，包含 `ContainsMachineCode`，代码生成器为 `jit`，架构为 `arm-little_endian-ilp32-eabi-hardfloat`。函数体是 ARM Thumb 机器码（例如 `4d f8 04 ed`），既没有 Moth 字节码，也没有原始源码文本。缓存可用于恢复结构，资源包才是源码的权威来源。
